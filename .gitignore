@@ -1,0 +1,7 @@
+# upstream clone, re-clone from https://github.com/taco-group/DRAMA-X
+DRAMA-X/
+
+__pycache__/
+*.pyc
+.idea/
+.DS_Store
