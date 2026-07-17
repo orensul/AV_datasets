@@ -39,6 +39,31 @@ SURFACE = "#fcfcfb"
 LATERAL = ["goes to the left", "goes to the right", "stationary"]
 VERTICAL = ["moves towards ego vehicle", "moves away from ego vehicle", "stationary"]
 POSITIONS = ["Left of ego vehicle", "Front of ego vehicle", "Right of ego vehicle"]
+RISKS = ["Yes", "No", "N/A"]
+ACTIONS = [
+    "(must) Stop",
+    "Slow down",
+    "Yield",
+    "be aware or cautious (of the important object, in case it might effect "
+    "in future but no direct influence)",
+    "Carefully manoeuvre (around the important object)",
+    "Follow the vehicle ahead",
+    "Start moving",
+    "Accelerate",
+    "N/A",
+]
+
+# Chip that marks a raw benchmark field name (as it appears in the JSONL).
+FIELD_CHIP = (
+    '<code style="background:#eef4fc;border:1px solid #c6dbf5;color:#1a5cb0;'
+    'border-radius:4px;padding:1px 7px;font-size:0.82em;white-space:nowrap">'
+    "{}</code>"
+)
+
+
+def field_row(name: str, value: str) -> str:
+    """One '`field_name`  value' line, field chip first."""
+    return f"{FIELD_CHIP.format(name)}&nbsp; {value}"
 
 
 @st.cache_data(show_spinner="Loading DRAMA-X annotations…")
@@ -98,7 +123,9 @@ def find_image(scene_id: str, images_root: str) -> str | None:
     parts = scene_id.split("_frame_")
     stem = parts[0]  # e.g. clip_305_000786
     frame = parts[1] if len(parts) > 1 else ""
-    for pattern in (f"**/{scene_id}*", f"**/{stem}*{frame}*", f"**/*{stem}*"):
+    # DRAMA ships frames as <clip_id>/frame_<n>.png; also try flat layouts.
+    for pattern in (f"**/{stem}/frame_{frame}*", f"**/{stem}/*{frame}*",
+                    f"**/{scene_id}*", f"**/{stem}*{frame}*", f"**/*{stem}*"):
         for hit in root.glob(pattern):
             if hit.suffix.lower() in {".jpg", ".jpeg", ".png"}:
                 return str(hit)
@@ -240,6 +267,50 @@ def bar_chart(labels: list[str], values: list[int], title: str,
     return fig
 
 
+VALUE_PILL = (
+    '<span style="background:#f4f4f0;border:1px solid #e1e0d9;color:#0b0b0b;'
+    'border-radius:12px;padding:2px 10px;margin:2px 4px 2px 0;'
+    'display:inline-block;font-size:0.88em">{}</span>'
+)
+
+
+def taxonomy_section() -> None:
+    """All possible values of every closed-vocabulary benchmark field."""
+    st.divider()
+    st.subheader("Benchmark taxonomy")
+    st.caption(
+        "Every closed-vocabulary field in the DRAMA-X annotations and all of "
+        "its possible values. The remaining fields are open-ended: "
+        f"{FIELD_CHIP.format('Box')} pixel coordinates [x1, y1, x2, y2], "
+        f"{FIELD_CHIP.format('Description')} free-text motion description, "
+        f"{FIELD_CHIP.format('id')} scene identifier.",
+        unsafe_allow_html=True,
+    )
+    scope_html = ('<span style="color:#898781;font-size:0.82em">'
+                  "&nbsp;{}</span>")
+    groups = [
+        ("Risk", "scene level", RISKS),
+        ("Intent[0] — lateral", "per agent", LATERAL),
+        ("Intent[1] — vertical", "per agent", VERTICAL),
+        ("Position", "per agent", POSITIONS),
+    ]
+    cols = st.columns(4)
+    for col, (name, scope, values) in zip(cols, groups):
+        with col:
+            st.markdown(FIELD_CHIP.format(name) + scope_html.format(scope),
+                        unsafe_allow_html=True)
+            st.markdown("<br>".join(VALUE_PILL.format(v) for v in values),
+                        unsafe_allow_html=True)
+    st.markdown("")
+    st.markdown(
+        FIELD_CHIP.format("suggested_action")
+        + scope_html.format(f"scene level — {len(ACTIONS)} values"),
+        unsafe_allow_html=True,
+    )
+    st.markdown("".join(VALUE_PILL.format(v) for v in ACTIONS),
+                unsafe_allow_html=True)
+
+
 def risk_badge(risk: str) -> str:
     if risk == "Yes":
         return (f'<span style="background:{RISK_YES};color:#fff;padding:4px 12px;'
@@ -303,6 +374,7 @@ def main() -> None:
     with tab_scene:
         if filtered.empty:
             st.warning("No scenes match the current filters.")
+            taxonomy_section()
             st.stop()
 
         if "pos" not in st.session_state:
@@ -343,25 +415,48 @@ def main() -> None:
                             width="stretch")
 
         with right:
+            st.markdown("##### Scene fields")
+            st.caption("Blue chips are the raw field names in the benchmark "
+                       "annotations (JSONL).")
             st.markdown(risk_badge(rec.get("Risk", "N/A")),
                         unsafe_allow_html=True)
-            st.markdown(f"**Suggested ego action:** "
-                        f"{rec.get('suggested_action', '—')}")
-            st.markdown(f"`{rec['id']}`")
+            st.markdown(field_row("Risk", rec.get("Risk", "—")),
+                        unsafe_allow_html=True)
+            st.markdown(
+                field_row("suggested_action", rec.get("suggested_action", "—")),
+                unsafe_allow_html=True)
+            st.markdown(field_row("id", f"`{rec['id']}`"),
+                        unsafe_allow_html=True)
             st.divider()
+            st.markdown("##### Agent fields "
+                        '<span style="color:#898781;font-size:0.85em">'
+                        "(per Pedestrian / Cyclist)</span>",
+                        unsafe_allow_html=True)
             for label, kind, agent in iter_agents(rec):
-                intent = agent.get("Intent", ["—", "—"])
+                intent = agent.get("Intent", [])
+                lat = intent[0] if intent else "—"
+                vert = intent[1] if len(intent) > 1 else "—"
                 color = PED_COLOR if kind == "Pedestrians" else CYC_COLOR
                 st.markdown(
                     f'<span style="color:{color};font-weight:700">■</span> '
-                    f"**{label} · {kind[:-1]}** — {agent.get('Position', '—')}",
+                    f"**{label} · {kind[:-1]}**",
                     unsafe_allow_html=True,
                 )
                 st.markdown(
-                    f"↔ {intent[0] if intent else '—'} &nbsp;·&nbsp; "
-                    f"↕ {intent[1] if len(intent) > 1 else '—'}"
+                    field_row("Box", f"`{agent.get('Box', '—')}`") + "<br>"
+                    + field_row("Intent", f"↔ {lat} &nbsp;·&nbsp; ↕ {vert}")
+                    + "<br>"
+                    + field_row("Position", agent.get("Position", "—")),
+                    unsafe_allow_html=True,
                 )
-                st.caption(agent.get("Description", ""))
+                st.markdown(
+                    field_row(
+                        "Description",
+                        f'<span style="color:{INK_MUTED};font-size:0.9em">'
+                        f'{agent.get("Description", "")}</span>',
+                    ),
+                    unsafe_allow_html=True,
+                )
 
     # ---------------- dataset statistics ----------------
     with tab_stats:
@@ -420,6 +515,8 @@ def main() -> None:
                 index[["id", "risk", "action", "n_ped", "n_cyc"]],
                 width="stretch", height=400,
             )
+
+    taxonomy_section()
 
 
 if __name__ == "__main__":
